@@ -1,0 +1,1673 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<script>
+  /* 禁止页面缩放：iOS 会忽略 viewport 的 user-scalable，需用 JS 拦截手势；其余浏览器靠上面的 viewport 标签 */
+  (function () {
+    document.addEventListener('gesturestart', e => e.preventDefault());
+    document.addEventListener('gesturechange', e => e.preventDefault());
+    document.addEventListener('gestureend', e => e.preventDefault());
+    let _lastTouchEnd = 0;
+    document.addEventListener('touchend', e => {
+      const now = Date.now();
+      if (now - _lastTouchEnd <= 300) e.preventDefault(); // 阻止 iOS 双击放大
+      _lastTouchEnd = now;
+    }, { passive: false });
+  })();
+</script>
+<title>小江投篮一式 · 可视化投篮模型</title>
+<style>
+   :root {
+    --bg: #0d1117;
+     --border: #2a3441;
+   --text: #e6edf3;
+    --muted: #8b98a5;
+    --red: #f85149;
+   
+  }
+  /* 隐藏数字输入框的增减按钮（Chrome/Safari/Edge） */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+  * { box-sizing: border-box; margin: 0; padding: 0; } 
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "PingFang SC", "Microsoft YaHei", -apple-system, "Segoe UI", sans-serif;
+    overflow: hidden;
+  }
+  #app { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+
+  #viewport { position: absolute; inset: 0; background: #0b0f16; }
+  #canvas3d { display: block; width: 100%; height: 100%; }
+
+  #hitTip {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%,-50%) scale(.8);
+    background: var(--panel2); color: var(--muted);
+    font-size: clamp(18px, 2.6vw, 30px); font-weight: 700;
+    padding: clamp(12px, 1.8vw, 22px) clamp(26px, 3.8vw, 50px);
+    border-radius: clamp(2px, 1vw, 6px);
+    border: clamp(1px, 0.15vw, 2px) solid var(--border); letter-spacing: 2px;
+    white-space: nowrap; text-align: center;
+    opacity: 0; pointer-events: none; transition: all .22s ease;
+     border-radius: 25px;
+  }
+  #hitTip.show { opacity: 1; transform: translate(-50%,-50%) scale(1); color: var(--text); }
+
+  #modeTip {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,.68); color: #fff; font-size: 13px; font-weight: 700;
+    padding: 6px 16px; border-radius: 999px; opacity: 0; pointer-events: none;
+    transition: opacity .2s ease; letter-spacing: 1px; white-space: nowrap;
+  }
+  #modeTip.show { opacity: 1; }
+
+  /* 右侧参数面板（浮在 3D 场景上方，高度跟随内容） */
+  #sidebar {
+    position: absolute; top: 0; right: 0;
+    width: 300px; height: auto; max-height: 100vh;
+    background: transparent;
+    display: flex; flex-direction: column; overflow-y: auto;
+    scrollbar-width: thin; scrollbar-color: transparent transparent;
+   border-radius: 25px;
+       border: 1px solid #6e86a0;
+       box-shadow: 0 0 14px rgba(123,160,196,.30);
+  }
+  /* 滚动条滚动球（滑块）背景透明 */
+  #sidebar::-webkit-scrollbar { width: 6px; }
+  #sidebar::-webkit-scrollbar-track { background: transparent; }
+  #sidebar::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; }
+  .side-section { padding: 16px 18px; background: var(--panel); }
+  .side-title {
+    padding-bottom: 5px;
+    font-size: 13px; font-weight: 700; color: var(--muted);
+   display: flex; align-items: center; gap: 8px;
+  }
+  .field { margin-bottom: 11px; }
+  .field label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 12px; color: var(--muted); margin-bottom: 5px;
+  }
+  .field label .sym { color: var(--text); font-weight: 700; font-family: "Cambria Math", Georgia, serif; font-style: italic; }
+  .field label .unit { font-size: 11px; color: #5b6b7a; }
+  .field .ctl { display: flex; gap: 8px; align-items: center; }
+  .field input[type="number"] {
+    width: 64px; flex-shrink: 0; background: var(--panel2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 7px; padding: 6px 8px; font-size: 13px; outline: none;
+    transition: border .15s, box-shadow .15s; text-align: center;
+  }
+  .field input[type="number"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255,122,26,.15); }
+  .field input[type="number"].optional { border-style: dashed; }
+  .field input[type="range"] {
+    flex: 1; min-width: 0; -webkit-appearance: none; appearance: none;
+    height: 5px; border-radius: 3px; background: var(--panel2); border: 1px solid var(--border);
+    outline: none; cursor: pointer;
+  }
+  .field input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--accent); border: 2px solid #fff; cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,.4);
+  }
+  .field input[type="range"]::-moz-range-thumb {
+    width: 16px; height: 16px; border-radius: 50%; background: var(--accent);
+    border: 2px solid #fff; cursor: pointer;
+  }
+
+  .btn-row { display: flex; gap: 10px; margin-top: 4px; }
+  .btn {
+  
+    flex: 1; border: none; border-radius: 8px; padding: 10px 12px;
+    font-size: 14px; font-weight: 700; cursor: pointer; transition: transform .1s, filter .15s;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary { background: var(--panel2); color: var(--muted); border: 1px solid var(--border); }
+  .btn-primary:hover { color: var(--text); }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-ghost { background: var(--panel2); color: var(--muted); border: 1px solid var(--border); }
+  .btn-ghost:hover { color: var(--text); }
+
+  /* 结果（紧凑） */
+  .result-inline { font-size: 13px; line-height: 1.9; }
+  .result-inline .row { display: flex; justify-content: space-between; }
+  .result-inline .row .k { color: var(--muted); }
+  .result-inline .row .v { color: var(--accent2); font-weight: 700; }
+  .result-inline .row .v.big { color: var(--accent); font-size: 15px; }
+
+ #errBox {
+    display: none; background: rgba(248,81,73,.12); border: 1px solid var(--red);
+    color: #ff9b98; border-radius: 7px; padding: 8px 10px; font-size: 12px; line-height: 1.5; margin-top: 10px;
+  }
+ 
+  /* 控制面板底部的"计算器"链接（与投篮按钮同款样式：整圈边框 + 圆角） */
+  .calc-link {
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 18px 18px;
+    background: var(--panel2);
+    color: var(--muted); text-decoration: none; font-size: 14px; font-weight: 700;
+    padding: 10px 12px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border);
+    transition: filter .15s, transform .1s;
+  }
+  .calc-link:hover { color: var(--text); }
+  .calc-link:active { transform: translateY(1px); }
+
+  /* 模态框：水平垂直居中 + 自适应大小 + 内容滚动 */
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.62); backdrop-filter: blur(2px);
+    opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility .2s ease;
+  }
+  .modal-backdrop.show { opacity: 1; visibility: visible; }
+  .modal-panel {
+    width: min(92vw, 900px); height: min(85vh, 680px);
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 24px 70px rgba(0,0,0,.55);
+    transform: scale(.96); transition: transform .2s ease;
+    opacity: 0.7;
+  }
+  .modal-backdrop.show .modal-panel { transform: scale(1); }
+  .modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .modal-header .title { font-size: 14px; font-weight: 700; color: var(--accent2); }
+  .modal-body {
+    flex: 1; overflow: hidden;
+  }
+  .modal-body iframe { width: 100%; height: 100%; border: none; display: block; background: #fff; }
+
+  /* 动作选择模态框（样式同投篮参数面板，带滚动条） */
+  .action-panel {
+    width: min(92vw, 400px);
+    height: auto; max-height: min(80vh, 560px);
+    opacity: 1;
+  }
+  .action-body {
+    flex: 1; overflow-y: auto; padding: 16px 18px;
+    scrollbar-width: thin; scrollbar-color: rgba(139,152,165,.45) transparent;
+  }
+  .action-body::-webkit-scrollbar { width: 8px; }
+  .action-body::-webkit-scrollbar-track { background: transparent; }
+  .action-body::-webkit-scrollbar-thumb { background: rgba(139,152,165,.45); border-radius: 4px; }
+  .action-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .action-btn { flex: none; padding: 12px 12px; font-size: 14px; }
+
+  @media (max-width: 820px) {
+    #sidebar { width: 100%; left: 0; right: 0; top: auto; bottom: 0; max-height: 44vh; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="viewport">
+    <canvas id="canvas3d"></canvas>
+    <div id="hitTip">命中</div>
+    <div id="modeTip"></div>
+  </div>
+
+  <div id="sidebar">
+    <div class="side-section">
+      <div class="side-title">投篮参数</div>
+      <div class="field">
+        <label><span><span class="sym">S</span> 水平距离</span><span class="unit">m</span></label>
+        <div class="ctl">
+          <input type="range" class="slider" id="S_slider" min="1" max="12" step="0.1" value="4.6" />
+          <input type="number" id="S" step="0.1" value="4.6" />
+        </div>
+      </div>
+      <div class="field">
+        <label><span><span class="sym">h</span> 高度差</span><span class="unit">m</span></label>
+        <div class="ctl">
+          <input type="range" class="slider" id="h_slider" min="-2" max="5" step="0.05" value="0.79" />
+          <input type="number" id="h" step="0.05" value="0.79" />
+        </div>
+      </div>
+      <div class="field">
+        <label><span><span class="sym">m</span> 球质量</span><span class="unit">kg</span></label>
+        <div class="ctl">
+          <input type="range" class="slider" id="m_slider" min="0.1" max="2" step="0.01" value="0.62" />
+          <input type="number" id="m" step="0.01" value="0.62" />
+        </div>
+      </div>
+      <div class="field">
+        <label><span><span class="sym">F</span> 恒力</span><span class="unit">N</span></label>
+        <div class="ctl">
+          <input type="range" class="slider" id="F_slider" min="5" max="60" step="0.5" value="25" />
+          <input type="number" id="F" step="0.5" value="25" />
+        </div>
+      </div>
+      <div class="field">
+        <label><span><span class="sym">t</span> 作用时间</span><span class="unit">s</span></label>
+        <div class="ctl">
+          <input type="range" class="slider" id="t_slider" min="0.05" max="1" step="0.01" value="0.18" />
+          <input type="number" id="t" step="0.01" value="0.18" />
+        </div>
+      </div>
+      <div class="field">
+        <label><span><span class="sym">x</span> 出手角度</span><span class="unit">°</span></label>
+        <div class="ctl">
+          <input type="range" class="slider" id="x_slider" min="0" max="90" step="1" value="52" />
+          <input type="number" id="x" step="1" value="52" />
+        </div>
+      </div>
+      <div class="field">
+        <label><span><span class="sym">g</span> 重力加速度</span><span class="unit">m/s²</span></label>
+        <div class="ctl">
+          <input type="range" class="slider" id="g_slider" min="1" max="20" step="0.1" value="9.8" />
+          <input type="number" id="g" step="0.1" value="9.8" />
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btnShoot">投篮</button>
+        <button class="btn btn-ghost" id="btnReset">重置</button>
+      </div>
+      <div id="errBox"></div>
+    </div>
+
+    <a class="calc-link" id="calcLink" href="javascript:void(0)">
+      计算器
+    </a>
+  </div>
+</div>
+
+<!-- 计算器模态框 -->
+<div class="modal-backdrop" id="modalBackdrop" role="dialog" aria-modal="true" aria-label="投篮参数计算器">
+  <div class="modal-panel">
+    
+    <div class="modal-body">
+      <iframe id="calcFrame" title="投篮参数计算器" loading="lazy"></iframe>
+    </div>
+  </div>
+</div>
+
+<!-- 动作选择模态框 -->
+<div class="modal-backdrop" id="actionModal" role="dialog" aria-modal="true" aria-label="选择动作">
+  <div class="modal-panel action-panel">
+    <div class="modal-header">
+      <span class="title">选择动作</span>
+    </div>
+    <div class="modal-body action-body">
+      <div class="action-grid">
+        <button class="btn btn-primary action-btn" data-action="0">热身</button>
+        <button class="btn btn-primary action-btn" data-action="3">前踢</button>
+        <button class="btn btn-primary action-btn" data-action="4">摔倒</button>
+        <button class="btn btn-primary action-btn" data-action="5">旋转踢</button>
+        <button class="btn btn-primary action-btn" data-action="7">拳击</button>
+        <button class="btn btn-primary action-btn" data-action="8">体操</button>
+        <button class="btn btn-primary action-btn" data-action="9">跳舞</button>
+        <button class="btn btn-primary action-btn" data-action="10">俯卧撑</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* =====================================================================
+ * 1. 物理核心 —— 牛顿第二定律 + 抛体运动
+ *    初速度 v0 = F·t / m（默认初速度为 0，恒力 F 作用时间 t）
+ *    分解：v0x = v0·cos x，v0y = v0·sin x
+ *    达到最高点时间 t上 = v0y / g
+ *    射程 R = 2·t上·v0x；最高点 h = v0y² / (2g)
+ * ===================================================================== */
+function computeV0(m, F, t, xDeg, g) {
+  const x = xDeg * Math.PI / 180;
+  const v0 = F * t / m;                    // 牛顿第二定律 F=ma → v0=at=Ft/m
+  const v0x = v0 * Math.cos(x);            // 水平初速度
+  const v0y = v0 * Math.sin(x);            // 竖直初速度
+  const tUp = v0y / g;                     // 达到最高点的时间
+  const range = 2 * tUp * v0x;             // 落回出手高度的水平射程
+  const hMax = v0y * v0y / (2 * g);        // 最高点（相对出手点）
+  return { v0, v0x, v0y, tUp, range, hMax, xRad: x, g };
+}
+
+/* =====================================================================
+ * 2. 场景搭建
+ * ===================================================================== */
+const canvas = document.getElementById('canvas3d');
+const viewport = document.getElementById('viewport');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101826);
+
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
+camera.position.set(4, 4, 9);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.maxPolarAngle = Math.PI * 0.55;
+controls.minDistance = 2;
+controls.maxDistance = 45;
+
+// —— 双击切换视角模式：旋转 ↔ 平移（左键拖拽）——
+const modeTip = document.getElementById('modeTip');
+let panMode = false;
+let modeTipTimer = null;
+function setPanMode(on) {
+  panMode = on;
+  controls.mouseButtons.LEFT = on ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+  modeTip.textContent = on ? '平移模式：拖动移动视角（再双击恢复旋转）' : '旋转模式：拖动旋转视角（双击切换平移）';
+  modeTip.classList.add('show');
+  clearTimeout(modeTipTimer);
+  modeTipTimer = setTimeout(() => modeTip.classList.remove('show'), 2200);
+}
+renderer.domElement.addEventListener('dblclick', () => setPanMode(!panMode));
+
+// 灯光
+scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x2a2418, 0.65));
+const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+sun.position.set(8, 12, 6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -24; sun.shadow.camera.right = 24;
+sun.shadow.camera.top = 24; sun.shadow.camera.bottom = -24;
+sun.shadow.camera.far = 70;
+scene.add(sun);
+
+// 地面
+const floor = new THREE.Mesh(
+  new THREE.CircleGeometry(35, 64),
+  new THREE.MeshStandardMaterial({ color: 0x2b3a4a, roughness: 0.9, metalness: 0.05 })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+const grid = new THREE.GridHelper(30,30, 0x3a4a5c, 0x24303e);
+grid.position.y = 0.01;
+scene.add(grid);
+
+// 投篮方向参考线（地面）
+const shootLine = new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.02, 0), new THREE.Vector3(14, 0.02, 0)]),
+  new THREE.LineBasicMaterial({ color: 0xff7a1a, transparent: true, opacity: 0.3 })
+);
+scene.add(shootLine);
+
+// 篮球场半场线（罚球线、三分线、三秒区、边线、底线、中圈），以篮筐为基准按现实球场绘制
+const courtLinesGroup = new THREE.Group();
+scene.add(courtLinesGroup);
+function buildCourtLines() {
+  while (courtLinesGroup.children.length) courtLinesGroup.remove(courtLinesGroup.children[0]);
+  const rimX = RELEASE_X + getS();   // 篮筐地面中心 x（固定）
+  const Y = 0.015;            // 地面线高度（略高于网格，避免重叠闪烁）
+  const W = 15, L = 14;       // 球场宽 15m、半场长 14m
+  const HW = W / 2;
+  const R3 = 6.75;            // 三分线半径（FIBA）
+  const FT = 4.6;             // 罚球线距篮筐
+  const FTW = 3.6;            // 罚球线长
+  const KEYW = 4.9;           // 三秒区宽
+  const CR = 1.8;             // 罚球圈 / 中圈半径
+  const BASE = rimX + 1.5;    // 底线 x（篮板后方约 1.5m）
+  const WHITE = 0xe8eef5;
+
+  // 地面线：细线即可
+  function addLine(pts, color) {
+    const geo = new THREE.BufferGeometry().setFromPoints(
+      pts.map(p => new THREE.Vector3(p[0], Y, p[1]))
+    );
+    courtLinesGroup.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: color || WHITE, transparent: true, opacity: 0.9 })));
+  }
+  // 圆弧：圆心(cx,cz)、半径 r、角度 a0→a1（弧度）；投球点一侧半圆 = π/2 → 3π/2
+  function addArc(cx, cz, r, a0, a1, color, steps = 60) {
+    const pts = [];
+    for (let i = 0; i <= steps; i++) {
+      const a = a0 + (a1 - a0) * (i / steps);
+      pts.push([cx + r * Math.cos(a), cz + r * Math.sin(a)]);
+    }
+    addLine(pts, color);
+  }
+
+  // 底线 + 边线 + 中线（半场矩形）
+  addLine([[BASE, -HW], [BASE, HW]]);
+  addLine([[BASE, -HW], [rimX - L, -HW]]);
+  addLine([[BASE, HW], [rimX - L, HW]]);
+  addLine([[rimX - L, -HW], [rimX - L, HW]]);
+
+  // 三秒区（限制区）两条竖边
+  addLine([[BASE, -KEYW / 2], [rimX - FT, -KEYW / 2]]);
+  addLine([[BASE, KEYW / 2], [rimX - FT, KEYW / 2]]);
+
+  // 罚球线 + 罚球圈
+  addLine([[rimX - FT, -FTW / 2], [rimX - FT, FTW / 2]]);
+  addArc(rimX - FT, 0, CR, Math.PI / 2, Math.PI * 1.5);
+
+  // 三分线弧（橙色突出）
+  addArc(rimX, 0, R3, Math.PI / 2, Math.PI * 1.5, 0xff7a1a);
+
+  // 中圈（半场内的半圆）
+  addArc(rimX - L, 0, CR, Math.PI / 2, Math.PI * 1.5);
+}
+
+/* ---------------------------------------------------------------------
+ * 篮筐与篮板
+ * --------------------------------------------------------------------- */
+const hoopGroup = new THREE.Group();   // 定位到篮筐中心（rimX, rimY, 0）
+scene.add(hoopGroup);
+const rimMat = new THREE.MeshStandardMaterial({ color: 0xff6a00, roughness: 0.4, metalness: 0.6 });
+const rim = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.02, 16, 48), rimMat);
+rim.rotation.x = Math.PI / 2;
+rim.castShadow = true;
+hoopGroup.add(rim);
+
+/* —— 篮筐网（挂在 hoopGroup 下，随篮筐位置移动；球穿过时被顶开产生 swish 形变） —— */
+const NET_R0 = 0.34;   // 网口半径（略小于筐口内沿）
+const NET_R1 = 0.19;   // 网底半径（收口，继续加大向内凹弧度）
+const NET_H = 0.55;    // 网高度（加长）
+const NET_SEG = 12;    // 周向分段（竖向绳数）
+const NET_RINGS = 6;   // 水平环数
+const netPts = [];
+for (let i = 0; i < NET_SEG; i++) {
+  const a0 = (i / NET_SEG) * Math.PI * 2;
+  const cx = Math.cos(a0), cz = Math.sin(a0);
+  let prev = null;
+  for (let j = 0; j <= NET_RINGS; j++) {
+    const t = j / NET_RINGS;
+    const r = NET_R0 + (NET_R1 - NET_R0) * t;
+    const y = -NET_H * t;
+    const x = cx * r, z = cz * r;
+    if (prev) netPts.push(prev[0], prev[1], prev[2], x, y, z);
+    prev = [x, y, z];
+  }
+}
+for (let j = 1; j < NET_RINGS; j++) {
+  const t = j / NET_RINGS;
+  const r = NET_R0 + (NET_R1 - NET_R0) * t;
+  const y = -NET_H * t;
+  for (let i = 0; i < NET_SEG; i++) {
+    const a0 = (i / NET_SEG) * Math.PI * 2;
+    const a1 = ((i + 1) / NET_SEG) * Math.PI * 2;
+    netPts.push(Math.cos(a0) * r, y, Math.sin(a0) * r, Math.cos(a1) * r, y, Math.sin(a1) * r);
+  }
+}
+const netGeo = new THREE.BufferGeometry();
+const netPos = new Float32Array(netPts);
+netGeo.setAttribute('position', new THREE.BufferAttribute(netPos, 3));
+const netRest = netPos.slice();                  // 静止时顶点坐标
+const netDeform = new Float32Array(netPos.length); // 当前逐顶点位移
+const netMat = new THREE.LineBasicMaterial({ color: 0xf2f2f2, transparent: true, opacity: 0.6 });
+const net = new THREE.LineSegments(netGeo, netMat);
+hoopGroup.add(net);
+
+// 每帧更新网形：球靠近网绳时沿径向向外顶开、向下拉，离开后弹回
+function updateNet() {
+  const bl = hoopGroup.worldToLocal(ballGroup.position.clone());
+  const bx = bl.x, by = bl.y, bz = bl.z;
+  const influenceR = BALL_R + 0.16;   // 影响范围放大，让更多网绳被球带动
+  const pos = netGeo.attributes.position.array;
+  for (let k = 0; k < pos.length; k += 3) {
+    const x0 = netRest[k], y0 = netRest[k + 1], z0 = netRest[k + 2];
+    const r0 = Math.hypot(x0, z0);
+    let dx = 0, dy = 0, dz = 0;
+    if (by <= 0.04 && by >= -NET_H - 0.12) {
+      const d = Math.hypot(x0 - bx, y0 - by, z0 - bz);
+      const overlap = influenceR - d;        // >0 表示球与这条绳重叠
+      if (overlap > 0) {
+        const rr = r0 > 1e-4 ? r0 : 1;
+        const push = overlap * 2.4;          // 进球时网被撑得更开
+        dx = (x0 / rr) * push;               // 沿径向向外顶开
+        dz = (z0 / rr) * push;
+        dy = -overlap * 1.0;                 // 向下拉（反应更明显）
+      }
+    }
+    netDeform[k]     += (dx - netDeform[k]) * 0.35;
+    netDeform[k + 1] += (dy - netDeform[k + 1]) * 0.35;
+    netDeform[k + 2] += (dz - netDeform[k + 2]) * 0.35;
+    pos[k]     = x0 + netDeform[k];
+    pos[k + 1] = y0 + netDeform[k + 1];
+    pos[k + 2] = z0 + netDeform[k + 2];
+  }
+  netGeo.attributes.position.needsUpdate = true;
+}
+// 篮板 + 支撑臂 + 立柱随投篮方向旋转（面向投球点）
+const supportGroup = new THREE.Group();
+hoopGroup.add(supportGroup);
+const boardMat = new THREE.MeshStandardMaterial({ color: 0xe8eef5, roughness: 0.5, metalness: 0.1, transparent: true, opacity: 0.92 });
+const board = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.5, 2.6), boardMat);
+board.castShadow = true;
+board.receiveShadow = true;
+board.position.set(0.5, 0, 0);   // 篮板在篮筐环后方 0.5m
+supportGroup.add(board);
+const poleMat = new THREE.MeshStandardMaterial({ color: 0x556677, roughness: 0.5, metalness: 0.7 });
+const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3.05, 16), poleMat);
+pole.castShadow = true;
+pole.position.set(0.8, 0, 0);    // 立柱（高度在 layoutScene 里动态设置）
+supportGroup.add(pole);
+const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.26, 16), poleMat);
+arm.rotation.z = Math.PI / 2;
+arm.position.set(0.635, 0, 0);   // 支撑臂：只连接篮板背面与立柱
+supportGroup.add(arm);
+
+/* ---------------------------------------------------------------------
+ * 轨迹线与出手点标记（球形状虚线）
+ * --------------------------------------------------------------------- */
+const BALL_DIAMETER = 0.40;   // 增大球，夹在两手间不悬浮
+const trajLine = new THREE.Line(
+  new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({ color: 0xff7a1a, transparent: true, opacity: 0 })
+);
+trajLine.visible = false;
+scene.add(trajLine);
+// 出手点标记：球形状（虚线线框，体现"虚"），投掷前始终显示
+const releaseMark = new THREE.Mesh(
+  new THREE.SphereGeometry(BALL_DIAMETER / 2, 20, 16),
+  new THREE.MeshBasicMaterial({ color: 0xffd166, wireframe: true, transparent: true, opacity: 0.6 })
+);
+releaseMark.visible = true;
+scene.add(releaseMark);
+
+/* ---------------------------------------------------------------------
+ * 角度箭头（可拖拽）+ 坐标系 + 夹角标注
+ * --------------------------------------------------------------------- */
+const angleArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), 1.6, 0xffd166, 0.32, 0.18);
+angleArrow.line.material.linewidth = 2;
+scene.add(angleArrow);
+// 拖拽手柄（不可见，用于 raycast）
+const angleHandle = new THREE.Mesh(
+  new THREE.SphereGeometry(0.5, 12, 12),
+  new THREE.MeshBasicMaterial({ visible: false })
+);
+scene.add(angleHandle);
+// 抛球点选中手柄（不可见，用于点击选中 + 沿圆弧拖拽）
+const releaseHandle = new THREE.Mesh(
+  new THREE.SphereGeometry(0.55, 12, 12),
+  new THREE.MeshBasicMaterial({ visible: false })
+);
+scene.add(releaseHandle);
+
+// —— 文字 Sprite（用于坐标刻度、夹角标注）——
+function makeTextSprite(text, height, color) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.font = 'bold 72px "Microsoft YaHei", Arial, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = color || '#ffffff';
+  ctx.fillText(text, 128, 64);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+  const sp = new THREE.Sprite(mat);
+  sp.scale.set(height * 2, height, 1);
+  return sp;
+}
+
+// 投球点坐标系组（横轴、纵轴、刻度、标签）
+const coordGroup = new THREE.Group();
+scene.add(coordGroup);
+// 篮筐坐标系组（无数值，横轴/纵轴穿过投球点坐标轴）
+const rimCoordGroup = new THREE.Group();
+scene.add(rimCoordGroup);
+// 夹角标注
+const angleLabel = makeTextSprite('52°', 0.4, '#ffd166');
+angleLabel.renderOrder = 999;
+scene.add(angleLabel);
+// 角度弧线（箭头与横轴之间的弧度标记）
+const angleArc = new THREE.Line(
+  new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.9 })
+);
+angleArc.renderOrder = 998;
+scene.add(angleArc);
+
+// 抛球点圆弧（选中抛球点后显示；圆心=篮筐地面中心，半径=水平距离 S，正前方半圆）
+const dirArc = new THREE.Line(
+  new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({ color: 0xff7a1a, transparent: true, opacity: 0.9 })
+);
+dirArc.visible = false;
+scene.add(dirArc);
+
+/* =====================================================================
+ * 3. 模型加载
+ * ===================================================================== */
+const loader = new GLTFLoader();
+const ballGroup = new THREE.Group();
+ballGroup.visible = false;
+scene.add(ballGroup);
+const personGroup = new THREE.Group();
+scene.add(personGroup);
+
+let mixer = null;           // 人物动画混合器
+let shootAction = null;     // 投篮动作
+let allClips = [];          // 全部动作片段（索引对应动画，1=投篮）
+let releaseTime = 5.8;      // 出手时刻（动画时间，秒）
+
+// —— 用骨骼距离归一化人物（蒙皮模型 setFromObject 不可靠）
+// 脚底贴地时，模型相比"脚骨贴地"额外抬升的高度（m），出手点高度需同步抬升
+let soleLift = 0;
+
+// 计算蒙皮网格在世界坐标中的最低点（脚底），用于精确贴地、避免穿模
+function getSkinnedLowestWorldY(obj) {
+  let minY = Infinity;
+  const v = new THREE.Vector3();
+  const w = new THREE.Vector3();
+  obj.updateMatrixWorld(true);
+  obj.traverse(n => {
+    if (!n.isSkinnedMesh) return;
+    const pos = n.geometry.attributes.position;
+    const applyFn = n.applyBoneTransform || n.boneTransform;  // r151 起更名为 applyBoneTransform
+    if (!applyFn) return;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      applyFn.call(n, i, v);                 // 蒙皮后顶点（网格局部坐标）
+      w.copy(v).applyMatrix4(n.matrixWorld); // 转世界坐标
+      if (w.y < minY) minY = w.y;
+    }
+  });
+  return minY;
+}
+
+function normalizePerson(obj, targetHeight) {
+  obj.updateMatrixWorld(true);
+  const head = obj.getObjectByName('Head');
+  const foot = obj.getObjectByName('L_Foot') || obj.getObjectByName('R_Foot');
+  if (!head || !foot) return;
+  const hp = new THREE.Vector3(); head.getWorldPosition(hp);
+  const fp = new THREE.Vector3(); foot.getWorldPosition(fp);
+  const h = hp.y - fp.y;
+  if (h <= 0) return;
+  obj.scale.multiplyScalar(targetHeight / h);
+  obj.updateMatrixWorld(true);
+  foot.getWorldPosition(fp);
+  const soleY = getSkinnedLowestWorldY(obj);
+  if (isFinite(soleY)) {
+    soleLift = fp.y - soleY;   // 脚底在脚骨下方多远
+    obj.position.y -= soleY;   // 脚底贴地（而非脚骨贴地），避免脚穿模
+  } else {
+    obj.position.y -= fp.y;    // 兜底：无法测量时退回脚骨贴地
+  }
+}
+
+function normalizeBallToSize(obj, targetDiameter) {
+  let box = new THREE.Box3().setFromObject(obj);
+  let size = box.getSize(new THREE.Vector3());
+  let maxDim = Math.max(size.x, size.y, size.z);
+  if (maxDim <= 0) return;
+  obj.scale.multiplyScalar(targetDiameter / maxDim);
+  obj.updateMatrixWorld(true);
+  box = new THREE.Box3().setFromObject(obj);
+  size = box.getSize(new THREE.Vector3());
+  maxDim = Math.max(size.x, size.y, size.z);
+  if (maxDim > 0) obj.scale.multiplyScalar(targetDiameter / maxDim);
+  obj.updateMatrixWorld(true);
+  const c = new THREE.Box3().setFromObject(obj).getCenter(new THREE.Vector3());
+  obj.position.sub(c);
+}
+
+function loadBall() {
+  loader.load('篮球3d模型.glb', (gltf) => {
+    const obj = gltf.scene;
+    normalizeBallToSize(obj, BALL_DIAMETER);
+    obj.traverse(n => { if (n.isMesh) { n.castShadow = true; n.receiveShadow = true; } });
+    ballGroup.add(obj);
+  }, undefined, () => {
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(BALL_DIAMETER / 2, 32, 32),
+      new THREE.MeshStandardMaterial({ color: 0xff7a1a, roughness: 0.55 })
+    );
+    sphere.castShadow = true;
+    ballGroup.add(sphere);
+  });
+}
+
+function loadPerson() {
+  loader.load('小江(投篮).glb', (gltf) => {
+    const obj = gltf.scene;
+    normalizePerson(obj, 1.8);
+    obj.traverse(n => {
+      if (!n.isMesh) return;
+      n.castShadow = true;
+      n.receiveShadow = true;
+      const mats = Array.isArray(n.material) ? n.material : [n.material];
+      mats.forEach(m => {
+        if (m && m.isMeshStandardMaterial) {
+          if (m.roughness > 0.9) m.roughness = 0.9;   // 避免哑光塑料感
+          m.needsUpdate = true;
+        }
+      });
+    });
+    personGroup.add(obj);
+
+    // 动画：动作二（索引 1）是投篮；其余动作供模态框预览播放
+    if (gltf.animations && gltf.animations.length > 1) {
+      mixer = new THREE.AnimationMixer(obj);
+      shootAction = mixer.clipAction(gltf.animations[1]);
+      shootAction.setLoop(THREE.LoopOnce);
+      shootAction.clampWhenFinished = true;
+      shootAction.timeScale = 1.0;          // 原速，投篮动作约 2.1s
+      releaseTime = gltf.animations[1].duration * 0.32;   // ≈2.125s，手举到最高的出手帧
+      // 初始停在 t0 持球姿势（人物保持拿球状态）
+      shootAction.enabled = true;
+      shootAction.play();
+      mixer.update(0);
+      shootAction.paused = true;
+      shootAction.enabled = false;
+      // 其余动作（除投篮外）设为循环播放，供动作模态框选择
+      allClips = gltf.animations.map((clip, i) => {
+        const act = mixer.clipAction(clip);
+        if (i !== 1) {
+          act.setLoop(THREE.LoopRepeat);
+          act.clampWhenFinished = false;
+          act.timeScale = 1.0;
+        }
+        return act;
+      });
+    }
+    window.__status = 'person-loaded';
+  }, undefined, () => {
+    // fallback
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 1.2, 8, 16), new THREE.MeshStandardMaterial({ color: 0x8899aa, roughness: 0.7 }));
+    body.position.y = 1.0; body.castShadow = true;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 24, 24), new THREE.MeshStandardMaterial({ color: 0xe8c39e, roughness: 0.7 }));
+    head.position.y = 1.75; head.castShadow = true;
+    personGroup.add(body, head);
+  });
+}
+loadBall();
+loadPerson();
+
+/* ---------------------------------------------------------------------
+ * 手部骨骼世界位置
+ * --------------------------------------------------------------------- */
+function getHandWorldPos(out) {
+  const obj = personGroup.children[0];
+  if (!obj) { out.set(0, 2, 0); return; }
+  const hand = obj.getObjectByName('R_Hand') || obj.getObjectByName('L_Hand');
+  if (hand) { hand.getWorldPosition(out); return; }
+  out.set(0, 2, 0);
+}
+
+// 脚部骨骼世界位置
+function getFootWorldPos(out) {
+  const obj = personGroup.children[0];
+  if (!obj) { out.set(0, 0, 0); return; }
+  const foot = obj.getObjectByName('L_Foot') || obj.getObjectByName('R_Foot');
+  if (foot) { foot.getWorldPosition(out); return; }
+  out.set(0, 0, 0);
+}
+
+// 双手中间位置（球心）
+function getBallHoldPos(out) {
+  const obj = personGroup.children[0];
+  if (!obj) { out.set(0, 2, 0); return; }
+  const rh = obj.getObjectByName('R_Hand');
+  const lh = obj.getObjectByName('L_Hand');
+  if (rh && lh) {
+    const rp = new THREE.Vector3(), lp = new THREE.Vector3();
+    rh.getWorldPosition(rp); lh.getWorldPosition(lp);
+    out.set((rp.x + lp.x) / 2, (rp.y + lp.y) / 2, (rp.z + lp.z) / 2);
+    return;
+  }
+  if (rh) { rh.getWorldPosition(out); return; }
+  out.set(0, 2, 0);
+}
+
+// 出手点（人物前进完成后，球出手的位置）
+const releasePoint = new THREE.Vector3(0.84, 2.26, 0);   // 投球点 = 球被抛出位置（出手帧球心）
+const RELEASE_X = 0.84;       // 投篮方向角为 π（默认正前方）时投球点的 x 坐标
+const RELEASE_BASE_Y = 2.26;  // 人物站在地面时的出手点高度
+const FOOT_ADVANCE = 2.67;    // 动作二出手帧时人物脚前冲的距离（m），用于把人物后移
+const HAND_FORWARD = RELEASE_X + FOOT_ADVANCE;  // 出手帧时手在人物前方（局部 x）的偏移量
+let dirAngle = Math.PI;       // 投篮方向角（弧度）：抛球点绕篮筐的水平角度，π=正前方（默认左侧）
+let selecting = false;        // 是否已选中抛球点（显示圆弧）
+let draggingDir = false;      // 是否正在拖动抛球点沿圆弧移动
+
+// 投篮方向单位向量（水平面内，抛球点 → 篮筐）
+const tmpShootDir = new THREE.Vector3();
+function getShootDir(out) {
+  return out.set(-Math.cos(dirAngle), 0, -Math.sin(dirAngle));
+}
+// 人物/篮板朝向（绕 y 轴旋转角）
+function getDirRot() {
+  return Math.atan2(Math.sin(dirAngle), -Math.cos(dirAngle));
+}
+
+// 高度差 h<0 时（投球点高于篮筐），人物与抛球点抬高 |h|，用来体现"投球点高于球筐"
+function getPersonLift() {
+  return Math.max(0, -getH());
+}
+function updateStaticRelease() {
+  const S = getS();
+  const cx = RELEASE_X + S;   // 篮筐地面中心 x（固定，不随方向变化）
+  releasePoint.set(
+    cx + S * Math.cos(dirAngle),
+    RELEASE_BASE_Y + soleLift + getPersonLift(),
+    S * Math.sin(dirAngle)
+  );
+  releaseMark.position.copy(releasePoint);   // 抛球点标记跟随
+  if (releaseHandle) releaseHandle.position.copy(releasePoint);   // 选中手柄跟随
+}
+
+// 定位人物：朝向篮筐，出手帧时手正好落在 releasePoint 处
+function placePerson() {
+  const dirRot = getDirRot();
+  personGroup.rotation.y = dirRot;
+  personGroup.position.set(
+    releasePoint.x - HAND_FORWARD * Math.cos(dirRot),
+    getPersonLift(),
+    releasePoint.z + HAND_FORWARD * Math.sin(dirRot)
+  );
+  // 球始终保持在手上：人物移动（拖拽改变方向、调 S/h）时球跟随双手
+  if (animState === 'idle') {
+    const hold = new THREE.Vector3();
+    getBallHoldPos(hold);
+    ballGroup.position.copy(hold);
+  }
+}
+
+// 读取水平距离 S、高度差 h（仅用于控制篮筐架位置，不参与物理计算）
+function getS() { return parseFloat(document.getElementById('S').value) || 4.6; }
+// 注意 h=0 是合法值，不能用 || 兜底（会把 0 当成无效值）
+function getH() { const v = parseFloat(document.getElementById('h').value); return isNaN(v) ? 0.79 : v; }
+function getX() { const v = parseFloat(document.getElementById('x').value); return isNaN(v) ? 52 : v; }
+
+/* =====================================================================
+ * 4. 布局（篮筐架位置由 S、h 控制，球按公式飞行可能命中也可能偏出）
+ * ===================================================================== */
+function layoutScene() {
+  const S = getS();
+  const h = getH();
+  const ry = releasePoint.y;
+  const rimX = RELEASE_X + S;   // 篮筐地面中心 x（固定，不随方向变化）
+  const rimY = ry + h;          // 篮筐高度 = 投球点 + 高度差
+
+  // 篮筐环定位到篮筐中心；篮板/立柱/支撑臂固定朝向不变（不随方向旋转）
+  hoopGroup.position.set(rimX, rimY, 0);
+  // 立柱伸缩：从地面(0)到篮筐高度(rimY)
+  pole.geometry.dispose();
+  pole.geometry = new THREE.CylinderGeometry(0.06, 0.06, rimY, 16);
+  pole.position.set(0.8, -rimY / 2, 0);
+
+  // 人物定位（含朝向）：出手帧时手落在 releasePoint 处
+  placePerson();
+
+  // 相机焦点放在抛球点与篮筐之间
+  const t = 0.45;
+  controls.target.set(
+    releasePoint.x + (rimX - releasePoint.x) * t,
+    ry + h * 0.5,
+    releasePoint.z + (0 - releasePoint.z) * t
+  );
+}
+
+/* ---------------------------------------------------------------------
+ * 角度箭头 + 投球点坐标系 + 篮筐坐标系 + 夹角标注
+ * --------------------------------------------------------------------- */
+
+// 构建两个二维坐标系：投球点坐标系（有数值）+ 篮筐坐标系（无数值）
+function buildCoordSystem() {
+  const S = getS();                            // 篮筐距离投球点
+  const h = getH();                            // 篮筐相对投球点的高度差
+  const rimX = RELEASE_X + S;                  // 篮筐地面中心 x（固定）
+  const rimY = releasePoint.y + h;
+
+  // —— 投球点坐标系（coordGroup，原点=投球点）——
+  while (coordGroup.children.length) coordGroup.remove(coordGroup.children[0]);
+  const xLen = S + 1.5;   // 横轴覆盖到篮筐再留余量
+  const yUp = Math.max(0, h) + 1.0;     // 纵轴向上延伸长度
+  const yDown = Math.max(0, -h) + 0.5;  // 纵轴向下延伸长度（h<0 时篮筐在下方，需向下的数轴）
+  const axisMat = new THREE.LineBasicMaterial({ color: 0x9fb3c8, transparent: true, opacity: 0.7 });
+  coordGroup.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(xLen, 0, 0)]), axisMat));
+  coordGroup.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -yDown, 0), new THREE.Vector3(0, yUp, 0)]), axisMat));
+  const tickMat = new THREE.LineBasicMaterial({ color: 0x9fb3c8, transparent: true, opacity: 0.8 });
+  for (let i = 1; i <= Math.floor(xLen); i++) {
+    coordGroup.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(i, -0.08, 0), new THREE.Vector3(i, 0.08, 0)]), tickMat));
+    const lbl = makeTextSprite(String(i), 0.28, '#9fb3c8');
+    lbl.position.set(i, -0.32, 0);
+    coordGroup.add(lbl);
+  }
+  // 纵轴刻度与数字（向上为正、向下为负；原点不标）
+  function addYTicks(from, to) {
+    for (let j = from; j <= to + 0.001; j += 0.5) {
+      if (Math.abs(j) < 0.001) continue;
+      coordGroup.add(new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-0.08, j, 0), new THREE.Vector3(0.08, j, 0)]), tickMat));
+      const lbl = makeTextSprite(j % 1 === 0 ? String(j) : j.toFixed(1), 0.24, '#9fb3c8');
+      lbl.position.set(-0.34, j, 0);
+      coordGroup.add(lbl);
+    }
+  }
+  addYTicks(0.5, yUp);
+  addYTicks(-yDown, -0.5);
+  coordGroup.position.copy(releasePoint);
+  coordGroup.rotation.y = getDirRot();   // 坐标系落在投篮平面内，x 轴指向篮筐
+
+  // —— 篮筐坐标系（rimCoordGroup，原点=篮筐中心，无数值）——
+  while (rimCoordGroup.children.length) rimCoordGroup.remove(rimCoordGroup.children[0]);
+  const rimAxisMat = new THREE.LineBasicMaterial({ color: 0x5b8def, transparent: true, opacity: 0.8 });
+  // 横轴：从篮筐向左延伸，穿过投球点纵轴（x=releasePoint.x）
+  rimCoordGroup.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(-(S + 1.5), 0, 0)]), rimAxisMat));
+  // 纵轴：从篮筐沿竖直方向延伸到投球点高度再略过一点（h<0 时向上延伸）
+  const rimYEnd = -h;
+  const rimYDir = rimYEnd >= 0 ? 1 : -1;
+  rimCoordGroup.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, rimYEnd + rimYDir * 0.5, 0)]), rimAxisMat));
+  rimCoordGroup.position.set(rimX, rimY, 0);
+  rimCoordGroup.rotation.y = getDirRot();   // 篮筐坐标系 x 轴（负向）指向投球点
+}
+
+// 抛球点圆弧：圆心=篮筐地面中心，半径=水平距离 S，正前方半圆（π/2 → 3π/2）
+function buildDirArc() {
+  const S = getS();
+  const cx = RELEASE_X + S;
+  const pts = [];
+  const steps = 72;
+  for (let i = 0; i <= steps; i++) {
+    const a = Math.PI / 2 + Math.PI * (i / steps);
+    pts.push(new THREE.Vector3(cx + S * Math.cos(a), 0.03, S * Math.sin(a)));
+  }
+  dirArc.geometry.dispose();
+  dirArc.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+}
+
+// 全量刷新布局（方向、S、h 变化时调用）
+function refreshLayout() {
+  updateStaticRelease();
+  layoutScene();
+  updateAngleArrow();        // 内含 buildCoordSystem
+  buildCourtLines();
+  updateTrajectoryPreview();
+  buildDirArc();
+}
+
+// 仅投篮方向变化时刷新（场地线只与 S 有关，无需重建）
+function applyDirection() {
+  updateStaticRelease();
+  layoutScene();
+  updateAngleArrow();        // 内含 buildCoordSystem
+  updateTrajectoryPreview();
+  buildDirArc();
+}
+
+// 更新箭头、夹角标注、坐标系
+function updateAngleArrow() {
+  const xDeg = getX();
+  const xRad = xDeg * Math.PI / 180;
+  const shootDir = getShootDir(tmpShootDir);
+  // 水平面内垂直于投篮方向的单位向量（用于把弧线/标签微微偏移出投篮平面，避免与坐标系重叠闪烁）
+  const lat = new THREE.Vector3(shootDir.z, 0, -shootDir.x);
+  // 箭头：落在投篮平面内，与水平方向夹角 xRad
+  angleArrow.position.copy(releasePoint);
+  angleArrow.setDirection(new THREE.Vector3(
+    shootDir.x * Math.cos(xRad), Math.sin(xRad), shootDir.z * Math.cos(xRad)
+  ));
+  angleArrow.setLength(1.6, 0.32, 0.18);
+  // 拖拽手柄放到箭头头部
+  angleHandle.position.set(
+    releasePoint.x + shootDir.x * Math.cos(xRad) * 1.6,
+    releasePoint.y + Math.sin(xRad) * 1.6,
+    releasePoint.z + shootDir.z * Math.cos(xRad) * 1.6
+  );
+  // 角度弧线：从投篮方向(0°)到箭头方向，半径 0.55
+  const arcR = 0.55;
+  const arcPts = [];
+  const steps = 24;
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * xRad;
+    arcPts.push(new THREE.Vector3(
+      releasePoint.x + shootDir.x * Math.cos(a) * arcR + lat.x * 0.02,
+      releasePoint.y + Math.sin(a) * arcR,
+      releasePoint.z + shootDir.z * Math.cos(a) * arcR + lat.z * 0.02
+    ));
+  }
+  angleArc.geometry.dispose();
+  angleArc.geometry = new THREE.BufferGeometry().setFromPoints(arcPts);
+  // 角度值：放在弧线中间（角平分线方向）偏外
+  const midA = xRad / 2;
+  const lbl = makeTextSprite(xDeg + '°', 0.4, '#ffd166');
+  angleLabel.position.set(
+    releasePoint.x + shootDir.x * Math.cos(midA) * (arcR + 0.45) + lat.x * 0.03,
+    releasePoint.y + Math.sin(midA) * (arcR + 0.45),
+    releasePoint.z + shootDir.z * Math.cos(midA) * (arcR + 0.45) + lat.z * 0.03
+  );
+  if (angleLabel.material.map) angleLabel.material.map.dispose();
+  angleLabel.material.dispose();
+  angleLabel.material = lbl.material;
+  // 坐标系
+  buildCoordSystem();
+}
+
+/* ---------------------------------------------------------------------
+ * 构建抛物线采样点（从 start 以水平初速 v0x、竖直初速 v0y 飞行 total 秒）
+ * --------------------------------------------------------------------- */
+function buildTrajectory(start, v0x, v0y, g, total) {
+  const shootDir = getShootDir(new THREE.Vector3());
+  const pts = [];
+  const steps = 80;
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * total;
+    pts.push(new THREE.Vector3(
+      start.x + shootDir.x * v0x * t,
+      start.y + v0y * t - 0.5 * g * t * t,
+      start.z + shootDir.z * v0x * t
+    ));
+  }
+  return pts;
+}
+
+// 出手前始终显示的抛物线预览（按恒力/时间/质量算初速度，跟随参数实时变化）
+function updateTrajectoryPreview() {
+  const m = parseFloat(document.getElementById('m').value) || 0.62;
+  const F = parseFloat(document.getElementById('F').value) || 25;
+  const t = parseFloat(document.getElementById('t').value) || 0.18;
+  const g = parseFloat(document.getElementById('g').value) || 9.8;
+  const xDeg = getX();
+  const data = computeV0(m, F, t, xDeg, g);
+  // 落地时间：从投球点高度落到地面（解 y=0 的正根）
+  const landT = (data.v0y + Math.sqrt(data.v0y * data.v0y + 2 * g * releasePoint.y)) / g;
+  const pts = buildTrajectory(releasePoint, data.v0x, data.v0y, g, landT);
+  trajLine.geometry.dispose();
+  trajLine.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+  // 抛物线已按需求永久隐藏，不再显示
+}
+
+/* =====================================================================
+ * 5. 动画状态机
+ * ===================================================================== */
+let animState = 'idle';   // idle | winding | flying | landed
+let animClock = 0;        // 投篮动作累计时间（真实秒）
+let released = false;
+let scored = false;       // 是否已进筐（用于避免进筐后仍被篮板反弹）
+let hitFired = false;     // 命中提示是否已触发
+let flyT = 0;
+let flyData = null;       // 篮球飞行参数（含重力）
+let flyStart = new THREE.Vector3();   // 球当前世界位置（飞行中）
+let flyVel = new THREE.Vector3();     // 球当前速度
+let flyStart0 = new THREE.Vector3();  // 出手点（解析命中判定用）
+let flyV0 = new THREE.Vector3();      // 出手初速度（解析命中判定用）
+let tToRim = Infinity;                // 球飞到篮筐平面所需时间（旧预判，已弃用）
+let willScore = false;                // 解析预判：这球是否命中（旧预判，已弃用）
+const BALL_R = BALL_DIAMETER / 2;
+const PHYS_DT = 0.002;   // 物理固定子步长（2ms，500Hz）——飞行积分与帧率无关，轨迹可复现
+let physAccum = 0;       // 飞行物理时间累加器（固定步长消费，余量跨帧保留）
+const RIM_R = 0.36;   // 筐口半径：球心穿过筐口水平面时，水平距筐心小于此值即视为进筐
+
+function resetBall() {
+  ballGroup.visible = true;
+  ballGroup.rotation.set(0, 0, 0);
+  getBallHoldPos(tmpV);           // 球回到双手中间（持球状态）
+  ballGroup.position.copy(tmpV);
+}
+
+function doRelease() {
+  // 篮球从双手中间位置飞出，按牛顿第二定律算出的初速度做抛体运动
+  const p = new THREE.Vector3();
+  getBallHoldPos(p);
+  const m = parseFloat(document.getElementById('m').value) || 0.62;
+  const F = parseFloat(document.getElementById('F').value) || 25;
+  const t = parseFloat(document.getElementById('t').value) || 0.18;
+  const g = parseFloat(document.getElementById('g').value) || 9.8;
+  const xDeg = getX();
+  const data = computeV0(m, F, t, xDeg, g);
+
+  const shootDir = getShootDir(new THREE.Vector3());
+  flyStart.set(p.x, p.y, p.z);
+  flyVel.set(shootDir.x * data.v0x, data.v0y, shootDir.z * data.v0x);
+  flyData = { g };
+  flyT = 0;
+
+  // —— 进筐判定改为"运行时真实轨迹检测"（见 animate 飞行分支）——
+  //    不再在出手时预判，而是每帧检测球心是否真的穿过筐口平面，
+  //    这样打板反弹后进筐也能正确触发命中提示。
+  tToRim = Infinity;
+  willScore = false;
+
+  physAccum = 0;   // 重置物理累加器，避免上一次投篮的余量带入新轨迹
+
+  released = true;
+  ballGroup.visible = true;
+  releaseMark.visible = false;   // 球到达投球点，标记消失
+  // 出手后保留抛物线预览，便于对照球是否沿轨迹飞行、轨迹是否穿过筐心
+
+  animState = 'flying';
+}
+
+function onShoot() {
+  clearError();
+  ensureAudio();   // 预热音频上下文（需在用户手势内，否则进筐时可能被浏览器拦截）
+  const m = parseFloat(document.getElementById('m').value);
+  const F = parseFloat(document.getElementById('F').value);
+  const t = parseFloat(document.getElementById('t').value);
+  const x = parseFloat(document.getElementById('x').value);
+  const g = parseFloat(document.getElementById('g').value);
+
+  if ([m, F, t, x, g].some(v => isNaN(v))) { showError('请完整填写参数'); return; }
+  if (m <= 0 || F <= 0 || t <= 0 || g <= 0) { showError('m、F、t、g 必须为正数'); return; }
+
+  const data = computeV0(m, F, t, x, g);
+
+  // 播放投篮动画
+  resetBall();
+  released = false;
+  scored = false;
+  hitFired = false;
+  animClock = 0;
+  // 人物后移到起点（含朝向），播放动画前进，到出手帧时正好到达出手点
+  placePerson();
+  // 投篮时取消选中并隐藏圆弧
+  selecting = false;
+  dirArc.visible = false;
+  // 人物运动：仅隐藏箭头、弧线、角度标注（坐标系保持显示）
+  angleArrow.visible = false;
+  angleArc.visible = false;
+  angleLabel.visible = false;
+  document.getElementById('hitTip').classList.remove('show');
+  if (mixer && shootAction) {
+    mixer.stopAllAction();   // 停止预览动作等其他动画
+    shootAction.reset();
+    shootAction.enabled = true;
+    shootAction.paused = false;
+    shootAction.play();
+    animState = 'winding';
+  } else {
+    // 无动画时直接出手
+    animState = 'idle';
+    doRelease();
+  }
+}
+
+function onReset() {
+  clearError();
+  resetBall();
+  if (mixer) mixer.stopAllAction();
+  if (shootAction) shootAction.enabled = false;
+  animState = 'idle';
+  placePerson();   // 人物回到起点（含朝向）
+  // 恢复持球状态：人物停在 t0、球在双手中间、重新显示箭头与弧线
+  if (mixer && shootAction) {
+    shootAction.reset();
+    shootAction.enabled = true;
+    shootAction.paused = false;
+    shootAction.play();
+    mixer.update(0);
+    shootAction.paused = true;
+    shootAction.enabled = false;
+  }
+  resetBall();
+  releaseMark.visible = true;               // 投球点重新显示
+  angleArrow.visible = true;
+  angleArc.visible = true;
+  angleLabel.visible = true;
+  updateAngleArrow();
+  updateTrajectoryPreview();                 // 重新显示抛物线预览
+  document.getElementById('hitTip').classList.remove('show');
+}
+
+function showError(msg) { const b = document.getElementById('errBox'); b.textContent = msg; b.style.display = 'block'; }
+function clearError() { document.getElementById('errBox').style.display = 'none'; }
+
+/* =====================================================================
+ * 6. 渲染循环
+ * ===================================================================== */
+const clock = new THREE.Clock();
+const tmpV = new THREE.Vector3();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  // 人物动画
+  if (mixer && shootAction && shootAction.enabled && animState === 'winding') {
+    animClock += dt;
+    mixer.update(dt);
+    // 篮球粘在双手中间（出手前）
+    if (!released) {
+      getBallHoldPos(tmpV);
+      ballGroup.position.copy(tmpV);
+      ballGroup.visible = true;
+    }
+    // 出手时刻（动作二结束：手举到最高点，球抛出）
+    if (!released && (animClock >= releaseTime / shootAction.timeScale || shootAction.paused)) {
+      doRelease();                    // 内部设 animState='flying'
+      shootAction.paused = true;      // 球出手即动作结束，定格在出手姿势
+      shootAction.enabled = false;
+    }
+  } else if (animState === 'preview' && mixer) {
+    // 预览动作：播放选中的动作，篮球隐藏
+    mixer.update(dt);
+    ballGroup.visible = false;
+  }
+
+  // 篮球飞行（固定子步长积分，轨迹与帧率无关、可复现）
+  if (animState === 'flying' && flyData) {
+    const g = flyData.g;
+    flyT += dt;
+
+    const S = getS();
+    const rimY = releasePoint.y + getH();
+    const rimX = RELEASE_X + S;
+    const boardX = RELEASE_X + S + 0.5;   // 篮板固定 x（不随投篮方向变化）
+    const boardFront = boardX - 0.03;     // 篮板前表面
+    const boardBack = boardX + 0.03;       // 篮板后表面
+
+    // 用固定步长消费本帧时间，余量跨帧保留 → 无论显示器是 60/120/240Hz，
+    // 每次物理推进都是完全相同的 PHYS_DT，轨迹逐帧可复现，命中判定不再抖动。
+    physAccum += dt;
+    while (physAccum >= PHYS_DT && animState === 'flying') {
+      physAccum -= PHYS_DT;
+
+      // 重力 + 位置积分（半隐式欧拉，固定步长）
+      flyVel.y -= g * PHYS_DT;
+      flyStart.x += flyVel.x * PHYS_DT;
+      flyStart.y += flyVel.y * PHYS_DT;
+      flyStart.z += flyVel.z * PHYS_DT;
+
+      // 进筐检测（运行时真实轨迹判定，兼容直接命中与打板后进筐）：
+      // 球正在下落、球心已降到筐口平面以下、且仍处于"筐口+网"竖直带内、
+      // 同时水平位置落在筐口圆内（距筐心 < RIM_R）→ 命中。
+      if (!scored && flyVel.y <= 0) {
+        const dRim = Math.hypot(flyStart.x - rimX, flyStart.z);
+        if (dRim < RIM_R && flyStart.y <= rimY && flyStart.y > rimY - 0.6) {
+          scored = true;
+          hitFired = true;
+          flyVel.x *= 0.25;   // 穿过篮筐网，水平大幅减速
+          flyVel.z *= 0.25;
+          document.getElementById('hitTip').classList.add('show');
+          playScoreSound();
+          setTimeout(() => document.getElementById('hitTip').classList.remove('show'), 1400);
+        }
+      }
+      // 地面碰撞：弹跳 + 摩擦
+      if (flyStart.y <= BALL_R) {
+        if (Math.abs(flyVel.y) < 0.8 && Math.abs(flyVel.x) < 0.8 && Math.abs(flyVel.z) < 0.8) {
+          flyStart.y = BALL_R;
+          flyVel.set(0, 0, 0);
+          animState = 'landed';
+        } else {
+          flyStart.y = BALL_R;
+          flyVel.y = -flyVel.y * 0.55;   // 地面反弹，损失能量
+          flyVel.x *= 0.7;               // 地面摩擦，水平减速
+          flyVel.z *= 0.7;
+        }
+      }
+      // 篮板实体碰撞：篮板固定朝向（面向 -x），两面都不可穿透（球碰到必须反弹）
+      if (flyStart.y > rimY - 0.85 && flyStart.y < rimY + 0.85 && Math.abs(flyStart.z) < 1.3 + BALL_R) {
+        // 从前方（-x 方向）撞篮板
+        if (flyVel.x > 0 && flyStart.x > boardFront - BALL_R && flyStart.x < boardFront) {
+          flyVel.x = -flyVel.x * 0.6;
+          flyStart.x = boardFront - BALL_R;
+        }
+        // 从后方撞篮板
+        else if (flyVel.x < 0 && flyStart.x < boardBack + BALL_R && flyStart.x > boardBack) {
+          flyVel.x = -flyVel.x * 0.6;
+          flyStart.x = boardBack + BALL_R;
+        }
+      }
+
+      // 篮筐环实体碰撞：球砸到篮筐环（半径 RIM_R、管壁 0.02）会被反弹。
+      // 仅在球心"贴近环圈"时触发；干净空心球（球心离筐轴很近）distToRing 远大于阈值，不受影响照常进筐。
+      {
+        const dxH = flyStart.x - rimX;
+        const dzH = flyStart.z;
+        const dH = Math.hypot(dxH, dzH);
+        const dyRim = flyStart.y - rimY;
+        const distToRing = Math.hypot(dH - RIM_R, dyRim);   // 球心到篮筐环圆（半径 RIM_R）的最短距离
+        if (distToRing < BALL_R + 0.02) {
+          const dirX = dxH / (dH || 1), dirZ = dzH / (dH || 1);
+          const radial = dH - RIM_R;
+          let nx = dirX * radial, ny = dyRim, nz = dirZ * radial;
+          const len = Math.hypot(nx, ny, nz) || 1;
+          nx /= len; ny /= len; nz /= len;
+          const pen = (BALL_R + 0.02) - distToRing;       // 沿法向推出到环表面，避免穿模
+          flyStart.x += nx * pen; flyStart.y += ny * pen; flyStart.z += nz * pen;
+          const vn = flyVel.x * nx + flyVel.y * ny + flyVel.z * nz;
+          if (vn < 0) {
+            const j = (1 + 0.5) * vn;   // 0.5 为篮筐环恢复系数（金属篮筐实际弹性，约 0.5 符合现实）
+            flyVel.x -= j * nx; flyVel.y -= j * ny; flyVel.z -= j * nz;
+          }
+        }
+      }
+    }
+
+    ballGroup.position.copy(flyStart);
+    ballGroup.rotation.z -= dt * 12;   // 仅视觉滚动，按真实帧时间
+  }
+
+  updateNet();   // 篮筐网随球形变 / 弹回
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+/* =====================================================================
+ * 7. UI 交互
+ * ===================================================================== */
+// 滑动条 <-> 输入框 联动，并触发对应的场景更新
+const paramDefs = [
+  { id: 'S', update: () => refreshLayout() },
+  { id: 'h', update: () => refreshLayout() },
+  { id: 'm', update: () => updateTrajectoryPreview() },
+  { id: 'F', update: () => updateTrajectoryPreview() },
+  { id: 't', update: () => updateTrajectoryPreview() },
+  { id: 'x', update: () => { updateAngleArrow(); updateTrajectoryPreview(); } },
+  { id: 'g', update: () => updateTrajectoryPreview() },
+];
+paramDefs.forEach(def => {
+  const slider = document.getElementById(def.id + '_slider');
+  const num = document.getElementById(def.id);
+  if (!slider || !num) return;
+  slider.addEventListener('input', () => {
+    num.value = slider.value;
+    if (def.optional && parseFloat(slider.value) === 0) num.value = '';
+    if (def.update) def.update();
+  });
+  num.addEventListener('input', () => {
+    const v = parseFloat(num.value);
+    if (!isNaN(v)) slider.value = v;
+    else if (def.optional) slider.value = 0;
+    if (def.update) def.update();
+  });
+});
+
+document.getElementById('btnShoot').addEventListener('click', onShoot);
+document.getElementById('btnReset').addEventListener('click', onReset);
+
+/* =====================================================================
+ * 进筐音效（Web Audio 合成，无需外部音频文件）
+ *   一个清脆"叮"声 + 一段短促"唰"声（模拟篮球穿网）
+ * ===================================================================== */
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  }
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+function playScoreSound() {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const t0 = ctx.currentTime;
+
+  // 1) 清脆提示音：正弦波从 880Hz 滑到 1760Hz
+  const osc = ctx.createOscillator();
+  const g1 = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(880, t0);
+  osc.frequency.exponentialRampToValueAtTime(1760, t0 + 0.06);
+  g1.gain.setValueAtTime(0.0001, t0);
+  g1.gain.exponentialRampToValueAtTime(0.32, t0 + 0.012);
+  g1.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.38);
+  osc.connect(g1).connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + 0.4);
+
+  // 2) 穿网"唰"声：短促带通白噪声，快速衰减
+  const dur = 0.28;
+  const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 3200;
+  bp.Q.value = 0.7;
+  const g2 = ctx.createGain();
+  g2.gain.setValueAtTime(0.0001, t0);
+  g2.gain.exponentialRampToValueAtTime(0.16, t0 + 0.02);
+  g2.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  src.connect(bp).connect(g2).connect(ctx.destination);
+  src.start(t0);
+  src.stop(t0 + dur);
+}
+
+/* =====================================================================
+ * "计算器"模态框：点击 → 居中弹出 iframe（本地 xjtlys.html）
+ * ===================================================================== */
+const modalBackdrop = document.getElementById('modalBackdrop');
+const calcFrame = document.getElementById('calcFrame');
+const calcLink = document.getElementById('calcLink');
+
+function openModal() {
+  if (!calcFrame.src) calcFrame.src = 'https://lzj00934-collab.github.io/Xiaojiang-s-pitching-formula/xjtlys.html';   // 懒加载 GitHub 上的计算器
+  modalBackdrop.classList.add('show');
+}
+function closeModal() {
+  modalBackdrop.classList.remove('show');
+}
+calcLink.addEventListener('click', (e) => { e.preventDefault(); openModal(); });
+// 点击遮罩空白处关闭
+modalBackdrop.addEventListener('click', (e) => { if (e.target === modalBackdrop) closeModal(); });
+// Esc 关闭
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeModal(); closeActionModal(); }
+});
+
+/* =====================================================================
+ * "选择动作"模态框：单击人物 → 弹出动作列表，点击播放对应动画（除投篮动作2外）
+ * ===================================================================== */
+const actionModal = document.getElementById('actionModal');
+
+function openActionModal() {
+  actionModal.classList.add('show');
+}
+function closeActionModal() {
+  actionModal.classList.remove('show');
+  controls.enabled = true;   // 关闭后恢复相机旋转
+}
+// 点击遮罩空白处关闭
+actionModal.addEventListener('click', (e) => { if (e.target === actionModal) closeActionModal(); });
+// 动作按钮：点击播放对应动画
+actionModal.querySelectorAll('.action-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const idx = parseInt(btn.dataset.action, 10);
+    playAction(idx);
+  });
+});
+
+// 个别动作的人物垂直补偿（修正悬空/穿模）。俯卧撑动画里人物整体偏高，需向下补偿约 0.66m
+const ACTION_Y_OFFSET = { 10: -0.66 };
+
+// 播放某个动作（除投篮动作 1 外）
+function playAction(index) {
+  if (!mixer || !allClips || index < 0 || index >= allClips.length || index === 1) return;
+  mixer.stopAllAction();
+  const act = allClips[index];
+  act.reset();
+  act.enabled = true;
+  act.play();
+  placePerson();          // 人物回到起点（含朝向）
+  const yOff = ACTION_Y_OFFSET[index] || 0;   // 俯卧撑等动作的悬空修正
+  if (yOff) personGroup.position.y += yOff;
+  animState = 'preview';  // 预览动作状态
+  // 动作期间仅隐藏篮球；保留投篮辅助可视化（抛球点、角度箭头/弧/标签、方向弧）始终可见
+  ballGroup.visible = false;
+  selecting = false;
+  closeActionModal();
+}
+
+/* —— 角度箭头拖拽 + 抛球点选中（沿圆弧改变投篮方向） —— */
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let dragging = false;
+
+function setMouse(e) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+// 由鼠标位置（投影到地面）计算投篮方向角并刷新
+function updateDirFromMouse(e) {
+  setMouse(e);
+  raycaster.setFromCamera(mouse, camera);
+  const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const hit = new THREE.Vector3();
+  if (raycaster.ray.intersectPlane(ground, hit)) {
+    const cx = RELEASE_X + getS();
+    let a = Math.atan2(hit.z, hit.x - cx);   // 相对篮筐地面中心的角度
+    if (a < 0) a += 2 * Math.PI;             // 归一化到 [0, 2π)
+    a = Math.max(Math.PI / 2, Math.min(3 * Math.PI / 2, a));   // 限制在前方半圆
+    dirAngle = a;
+    applyDirection();
+  }
+}
+
+function onPointerDown(e) {
+  setMouse(e);
+  raycaster.setFromCamera(mouse, camera);
+  // 1) 角度箭头手柄
+  const hitsAngle = raycaster.intersectObject(angleHandle);
+  if (hitsAngle.length > 0) {
+    dragging = true;
+    selecting = false;
+    dirArc.visible = false;
+    controls.enabled = false;
+    renderer.domElement.style.cursor = 'grabbing';
+    return;
+  }
+  // 2) 抛球点（选中并沿圆弧拖拽）
+  if (animState === 'idle') {
+    const hitsMark = raycaster.intersectObject(releaseHandle);
+    if (hitsMark.length > 0) {
+      selecting = true;
+      draggingDir = true;
+      dirArc.visible = true;
+      buildDirArc();
+      controls.enabled = false;
+      renderer.domElement.style.cursor = 'grabbing';
+      updateDirFromMouse(e);   // 立即按当前鼠标位置更新方向
+      return;
+    }
+  }
+  // 3) 人物（单击打开动作选择模态框）
+  if (animState === 'idle' || animState === 'preview') {
+    const hitsPerson = raycaster.intersectObject(personGroup, true);
+    if (hitsPerson.length > 0) {
+      controls.enabled = false;
+      openActionModal();
+      return;
+    }
+  }
+  // 4) 点击空白处取消选中
+  selecting = false;
+  dirArc.visible = false;
+}
+
+function onPointerMove(e) {
+  if (dragging) {
+    setMouse(e);
+    raycaster.setFromCamera(mouse, camera);
+    // 射线与投篮平面（过投球点、法线为水平面内垂直于投篮方向）求交
+    const shootDir = getShootDir(tmpShootDir);
+    const lat = new THREE.Vector3(shootDir.z, 0, -shootDir.x);
+    const plane = new THREE.Plane(lat, -lat.dot(releasePoint));
+    const hit = new THREE.Vector3();
+    if (raycaster.ray.intersectPlane(plane, hit)) {
+      const dx = (hit.x - releasePoint.x) * shootDir.x + (hit.z - releasePoint.z) * shootDir.z;
+      const dy = hit.y - releasePoint.y;
+      let ang = Math.atan2(dy, dx);
+      if (ang < 0) ang = 0;
+      if (ang > Math.PI / 2) ang = Math.PI / 2;
+      const deg = Math.round(ang * 180 / Math.PI);
+      document.getElementById('x').value = deg;
+      document.getElementById('x_slider').value = deg;
+      updateAngleArrow();
+    }
+    return;
+  }
+  if (draggingDir) {
+    updateDirFromMouse(e);
+    return;
+  }
+}
+
+function onPointerUp() {
+  if (dragging) {
+    dragging = false;
+    controls.enabled = true;
+    renderer.domElement.style.cursor = '';
+  }
+  if (draggingDir) {
+    draggingDir = false;
+    controls.enabled = true;
+    renderer.domElement.style.cursor = '';
+  }
+}
+renderer.domElement.addEventListener('pointerdown', onPointerDown);
+window.addEventListener('pointermove', onPointerMove);
+window.addEventListener('pointerup', onPointerUp);
+// hover 高亮提示
+function onPointerHover(e) {
+  if (dragging || draggingDir) return;
+  setMouse(e);
+  raycaster.setFromCamera(mouse, camera);
+  const hitsAngle = raycaster.intersectObject(angleHandle);
+  const hitsMark = (animState === 'idle') ? raycaster.intersectObject(releaseHandle) : [];
+  if (hitsAngle.length) renderer.domElement.style.cursor = 'grab';
+  else if (hitsMark.length) renderer.domElement.style.cursor = 'pointer';
+  else renderer.domElement.style.cursor = '';
+}
+renderer.domElement.addEventListener('pointermove', onPointerHover);
+
+/* =====================================================================
+ * 8. 启动
+ * ===================================================================== */
+function onResize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+// 等人物加载后初始化出手点与布局
+function initLayout() {
+  updateStaticRelease();
+  layoutScene();                             // 定位人物（含朝向）与篮筐
+  resetBall();                               // 球显示在双手中间（人物持球）
+  releaseMark.position.copy(releasePoint);   // 投球点标记显示在出手位置
+  releaseMark.visible = true;
+  updateAngleArrow();                        // 箭头 + 坐标系 + 夹角标注
+  buildCourtLines();                         // 罚球线 + 三分线
+  updateTrajectoryPreview();                 // 出手前始终显示抛物线
+  buildDirArc();                             // 抛球点圆弧（默认隐藏，选中后显示）
+}
+setTimeout(initLayout, 800);
+setTimeout(initLayout, 2000);   // 模型较大，二次确保
+
+// 暴露调试
+window.__dbg = { scene, renderer, camera, ballGroup, personGroup, releasePoint, getHandWorldPos, layoutScene, updateStaticRelease, refreshLayout, buildDirArc, placePerson, dirAngle: () => dirAngle, mixer: () => mixer, shootAction: () => shootAction, flyStart: () => flyStart, flyVel: () => flyVel, scored: () => scored, animState: () => animState };
+window.THREE = THREE;
+window.GLTFLoader = GLTFLoader;
+
+animate();
+</script>
+</body>
+</html>
